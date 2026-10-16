@@ -1,28 +1,5 @@
 {% extends "base.html" %}
-{% macro table(rows, show_fixed_in=True) %}
-  {% if rows %}
-  <div class="scroll"><table>
-    <thead><tr>
-      <th>{{ t('col_package') }}</th><th>{{ t('col_installed') }}</th>
-      {% if show_fixed_in %}<th>{{ t('col_fixed_in') }}</th>{% endif %}
-      <th class="num">{{ t('col_cves') }}</th><th>{{ t('col_priority') }}</th>
-      <th class="num">{{ t('col_fixable') }}</th><th class="num">{{ t('col_nofix') }}</th>
-    </tr></thead>
-    <tbody>
-    {% for r in rows[:limit] %}
-      <tr>
-        <td>{{ r.source_package }}</td><td class="mono">{{ r.installed_version }}</td>
-        {% if show_fixed_in %}<td class="mono">{{ r.target_version or '—' }}</td>{% endif %}
-        <td class="num">{{ r.cve_count }}</td>
-        <td><span class="badge p-{{ r.top_priority or 'unknown' }}">{{ t(r.top_priority or 'unknown') }}</span></td>
-        <td class="num">{{ r.fix_available + r.fix_with_pro }}</td><td class="num">{{ r.no_fix }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
-  {% if rows|length > limit %}<p class="muted">{{ t('more', n=rows|length - limit) }}</p>{% endif %}
-  {% else %}<p class="muted">{{ t('none') }}</p>{% endif %}
-{% endmacro %}
+{% macro badge(priority) %}<span class="badge p-{{ priority or 'unknown' }}">{{ t(priority or 'unknown') }}</span>{% endmacro %}
 
 {% block content %}
 <div class="bar">
@@ -35,21 +12,134 @@
 {% if state == 'unsupported' %}<p class="notice bad" role="alert">{{ t('unsupported') }}</p>{% endif %}
 
 {% if result and state in ('done', 'running') %}
-  <section class="cards">
-    <div class="card"><span class="label">{{ t('findings') }}</span><strong>{{ result.findings|length }}</strong></div>
-    <div class="card"><span class="label">{{ t('cves') }}</span><strong>{{ total_cves }}</strong></div>
-    <div class="card good"><span class="label">{{ t('fixable') }}</span><strong>{{ total_fixable }}</strong></div>
-    <div class="card"><span class="label">{{ t('no_fix') }}</span><strong>{{ total_nofix }}</strong></div>
-    <div class="card"><span class="label">{{ t('pending') }}</span><strong>{{ result.pending_updates }}</strong></div>
-  </section>
-  <p class="muted">{{ t('feed') }}: {{ result.feed_date or '?' }} ({{ t('feed_new') if result.feed_downloaded else t('feed_cached') }}) · {{ t('scanned') }}: {{ result.scanned_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+{% set sys = result.system %}
+{% if sys %}
+<p class="muted">{{ sys.os_name }} · {{ sys.kernel }} · {{ sys.architecture }} · {{ sys.user }} · {{ t('uptime', time=sys.uptime_seconds|uptime) }}</p>
+{% if sys.reboot_required %}<p class="notice warn" role="status">{{ t('reboot') }}</p>{% endif %}
+{% endif %}
+<p class="muted">{{ t('last_scan') }}: {{ result.scanned_at.strftime('%Y-%m-%d %H:%M UTC') }} · {{ t('feed') }}: {{ result.feed_date or '?' }} ({{ t('feed_new') if result.feed_downloaded else t('feed_cached') }})</p>
 
-  <section><h3>{{ t('kernel') }}</h3><p class="muted">{{ t('kernel_hint') }}</p>{{ table(kernel) }}</section>
-  <section><h3>{{ t('programs_fix') }}</h3><p class="muted">{{ t('programs_fix_hint') }}</p>{{ table(fixable) }}</section>
-  <section><h3>{{ t('programs_nofix') }}</h3><p class="muted">{{ t('programs_nofix_hint') }}</p>{{ table(unfixable, False) }}</section>
-  <section><h3>{{ t('old_kernels') }}</h3><p class="muted">{{ t('old_kernels_hint') }}</p>{{ table(old_kernels) }}</section>
-  {% if result.snap_stubs %}
-  <section><h3>{{ t('snaps') }}</h3><p class="mono">{{ result.snap_stubs|join(', ') }}</p></section>
+<section class="cards">
+  {% if sys %}
+  <div class="card">
+    <span class="label">{{ t('disk') }}</span><strong>{{ sys.disk_percent }}%</strong>
+    <meter min="0" max="100" low="70" high="85" optimum="30" value="{{ sys.disk_percent }}" aria-label="{{ t('disk') }}"></meter>
+    <span class="small">{{ t('disk_detail', used=sys.disk_used|bytes, free=sys.disk_free|bytes, total=sys.disk_total|bytes) }}</span>
+  </div>
+  <div class="card">
+    <span class="label">{{ t('ram') }}</span><strong>{{ sys.ram_percent }}%</strong>
+    <meter min="0" max="100" low="70" high="85" optimum="30" value="{{ sys.ram_percent }}" aria-label="{{ t('ram') }}"></meter>
+    <span class="small">{{ t('ram_detail', used=sys.ram_used_kib|size, free=(sys.ram_total_kib - sys.ram_used_kib)|size) }}</span>
+  </div>
   {% endif %}
+  <div class="card good">
+    <span class="label">{{ t('programs') }}</span><strong>{{ counts.ok }}/{{ counts.all }}</strong>
+    <span class="small">{{ t('programs_detail', vuln=counts.vulnerable, old=counts.outdated) }}</span>
+  </div>
+  <div class="card">
+    <span class="label">{{ t('reclaim') }}</span><strong>{{ result.reclaimable.total_kib|size }}</strong>
+    <span class="small">{{ t('reclaim_hint') }}</span>
+  </div>
+</section>
+
+<div class="layout">
+<div class="main-col">
+<section>
+  <h3>{{ t('tools') }}</h3>
+  <p class="muted">{{ t('tools_hint') }}</p>
+  <nav class="chips" aria-label="{{ t('tools') }}">
+    {% for f in filters %}
+    <a href="{{ url_for('index', f=f, q=q or None, show='all' if show_all else None) }}"{% if f == filter %} aria-current="true"{% endif %}>{{ t('f_' ~ f) }} · {{ counts[f] }}</a>
+    {% endfor %}
+  </nav>
+  <form method="get" action="/" class="filters">
+    <input type="hidden" name="f" value="{{ filter }}">
+    <input type="search" name="q" value="{{ q }}" maxlength="100" placeholder="{{ t('search') }}" aria-label="{{ t('search') }}">
+    <label class="check"><input type="checkbox" name="show" value="all"{% if show_all %} checked{% endif %}> {{ t('show_all') }}</label>
+    <button type="submit">{{ t('apply') }}</button>
+  </form>
+
+  <div class="scroll"><table>
+    <thead><tr>
+      <th>{{ t('col_tool') }}</th><th>{{ t('col_version') }}</th>
+      <th class="num">{{ t('col_size') }}</th><th>{{ t('col_state') }}</th>
+    </tr></thead>
+    <tbody>
+    {% for tool in page.items %}
+      <tr>
+        <td class="wrap"><strong>{{ tool.name }}</strong><br><span class="small">{{ tool.description }}</span>
+          {% if tool.cves %}
+          <details><summary>{{ t('cve_summary', n=tool.cve_count) }}{% if tool.fixed_in %} · {{ t('fixed_in', version=tool.fixed_in) }}{% elif tool.unfixable %} · {{ t('no_fix_yet') }}{% endif %}</summary>
+            <ul class="cves">
+            {% for c in tool.cves %}
+              <li>{{ badge(c.priority) }} <span class="mono">{{ c.cve_id }}</span>{% if c.fixed_version %} → <span class="mono">{{ c.fixed_version }}</span>{% else %} · {{ t('no_fix_yet') }}{% endif %}<br><span class="small">{{ c.summary }}</span></li>
+            {% endfor %}
+            </ul>
+            <p class="small">{{ t('details_note') }}</p>
+          </details>
+          {% endif %}
+        </td>
+        <td class="mono">{{ tool.version }}{% if tool.update_to %} → {{ tool.update_to }}{% endif %}</td>
+        <td class="num">{{ tool.size_kib|size }}</td>
+        <td>
+          {% if tool.state == 'vulnerable' %}{{ badge(tool.top_priority) }} {{ t('state_vulnerable') }}
+          {% elif tool.state == 'outdated' %}<span class="badge p-medium">{{ t('state_outdated') }}</span>
+          {% else %}<span class="badge p-ok">{{ t('state_ok') }}</span>{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">{{ t('none') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+
+  {% if page.pages > 1 %}
+  <nav class="pager" aria-label="Pages">
+    {% if page.number > 1 %}<a href="{{ url_for('index', f=filter, q=q or None, show='all' if show_all else None, page=page.number - 1) }}">{{ t('prev') }}</a>{% endif %}
+    <span>{{ t('page_of', n=page.number, total=page.pages) }}</span>
+    {% if page.number < page.pages %}<a href="{{ url_for('index', f=filter, q=q or None, show='all' if show_all else None, page=page.number + 1) }}">{{ t('next') }}</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+
+</div>
+<aside class="side-col">
+{% set rec = result.reclaimable %}
+{% if rec.total_kib %}
+<section class="reclaim">
+  <h3>{{ t('reclaim') }}</h3>
+  <ul>
+    {% if rec.old_kernel_kib %}<li><span>{{ t('reclaim_kernels') }}</span><strong>{{ rec.old_kernel_kib|size }}</strong></li>{% endif %}
+    {% if rec.apt_cache_kib %}<li><span>{{ t('reclaim_cache') }}</span><strong>{{ rec.apt_cache_kib|size }}</strong></li>{% endif %}
+    {% if rec.orphan_kib %}<li><span>{{ t('reclaim_orphans') }}</span><strong>{{ rec.orphan_kib|size }}</strong></li>{% endif %}
+  </ul>
+</section>
+{% endif %}
+
+{% if kernel %}
+<p class="notice"><strong>{{ t('kernel') }}:</strong> {{ kernel.installed_version }} · {{ t('kernel_cves', n=kernel.cve_count, fixed=kernel.target_version or '?') }}</p>
+{% endif %}
+
+<section>
+  <h3>{{ t('downloads') }}</h3>
+  {% if result.download_groups %}
+    {% set total_files = result.download_groups|sum(attribute='files') %}
+    {% set total_bytes = result.download_groups|sum(attribute='size_bytes') %}
+    <p class="muted">{{ result.downloads_folder }} · {{ t('downloads_summary', n=total_files, size=total_bytes|bytes) }}</p>
+    <ul class="downloads">
+    {% for g in result.download_groups %}
+      <li><span>{{ t('dl_' ~ g.key) }} · {{ g.files }}</span>
+        <meter min="0" max="{{ total_bytes }}" value="{{ g.size_bytes }}" aria-label="{{ t('dl_' ~ g.key) }}"></meter>
+        <strong>{{ g.size_bytes|bytes }}</strong></li>
+    {% endfor %}
+    </ul>
+  {% else %}<p class="muted">{{ t('downloads_empty', folder=result.downloads_folder or '~') }}</p>{% endif %}
+</section>
+
+{% if result.snap_stubs %}
+<section><h3>{{ t('snaps') }}</h3><p class="mono">{{ result.snap_stubs|join(', ') }}</p></section>
+{% endif %}
+</aside>
+</div>
 {% endif %}
 {% endblock %}

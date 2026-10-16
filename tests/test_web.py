@@ -7,11 +7,17 @@ from datetime import datetime, timezone
 
 import pytest
 
+from ganki.cleanup import Reclaimable
+from ganki.collectors.apt import Package
+from ganki.collectors.updates import Update
+from ganki.downloads import DownloadGroup
 from ganki.osv import Finding
 from ganki.release import UnsupportedReleaseError
 from ganki.service import ScanResult
 from ganki.summary import summarize
-from ganki.web.app import SESSION_COOKIE, create_app
+from ganki.system import SystemInfo
+from ganki.tools import build_tools
+from ganki.web.app import SESSION_COOKIE, create_app, uptime_text
 from ganki.web.i18n import pick_language, translate
 
 PORT = 8589
@@ -25,6 +31,26 @@ def make_result(summary="plain text"):
         Finding("CVE-2", "virtualbox", ("virtualbox",), "7.0", None, None, "medium", summary),
         Finding("CVE-3", "linux", ("linux-image",), "6.8.0-31.31", "6.8.0-90.91", None, "low", ""),
     ]
+    packages = [
+        Package("openssl", "1.0", "amd64", 900, "crypto toolkit", manual=True),
+        Package("virtualbox", "7.0", "amd64", 4000, "virtual machines", manual=True),
+        Package("vim", "9.1", "amd64", 3000, "text editor", manual=True),
+        Package("git", "2.43", "amd64", 38000, "version control", manual=True),
+        Package("libfoo1", "1.0", "amd64", 20, "internal library", manual=False),
+    ]
+    updates = [Update("vim", "amd64", "9.1", "9.2", "noble-updates", False)]
+    system = SystemInfo(
+        "Ubuntu 24.04 LTS",
+        "6.8.0-137-generic",
+        "x86_64",
+        "someone",
+        93600,
+        500 * 1024**3,
+        300 * 1024**3,
+        16 * 1024**2,
+        6 * 1024**2,
+        True,
+    )
     return ScanResult(
         ecosystem="Ubuntu:24.04:LTS",
         feed_downloaded=False,
@@ -34,6 +60,11 @@ def make_result(summary="plain text"):
         snap_stubs=["thunderbird"],
         pending_updates=5,
         scanned_at=datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc),
+        system=system,
+        reclaimable=Reclaimable(old_kernel_kib=500_000, apt_cache_kib=2_000_000),
+        download_groups=[DownloadGroup("archives", 3, 4 * 1024**3), DownloadGroup("pdf", 5, 10**6)],
+        downloads_folder="~/Descargas",
+        tools=build_tools(packages, findings, updates),
     )
 
 
@@ -138,15 +169,46 @@ def test_csp_forbids_inline_scripts_and_external_sources():
 # ---------- pages ----------
 
 
-def test_page_shows_sections_after_the_scan():
+def test_page_shows_the_mockup_sections_after_the_scan():
     client = login(build().test_client())
     client.get("/", base_url=BASE)  # starts the scan
     wait_until_done(client)
     html = client.get("/", base_url=BASE).get_data(as_text=True)
-    assert "openssl" in html
-    assert "virtualbox" in html
-    assert "6.8.0-31.31" in html  # listed as an old kernel
-    assert "thunderbird" in html
+    assert "Ubuntu 24.04 LTS" in html  # system strip
+    assert "60%" in html  # disk used
+    assert "restart" in html  # reboot notice
+    assert "openssl" in html and "virtualbox" in html and "vim" in html
+    assert "libfoo1" not in html  # dependencies are hidden by default
+    assert "thunderbird" in html  # snap placeholder note
+    assert "~/Descargas" in html
+    assert "4.0 GiB" in html  # downloads by type
+
+
+def test_filters_narrow_the_tools_table():
+    client = login(build().test_client())
+    client.get("/", base_url=BASE)
+    wait_until_done(client)
+    vulnerable = client.get("/?f=vulnerable", base_url=BASE).get_data(as_text=True)
+    assert "virtualbox" in vulnerable and "<strong>git</strong>" not in vulnerable
+    outdated = client.get("/?f=outdated", base_url=BASE).get_data(as_text=True)
+    assert "<strong>vim</strong>" in outdated and "<strong>openssl</strong>" not in outdated
+    assert "libfoo1" in client.get("/?show=all", base_url=BASE).get_data(as_text=True)
+    found = client.get("/?q=version+control", base_url=BASE).get_data(as_text=True)
+    assert "<strong>git</strong>" in found and "<strong>vim</strong>" not in found
+
+
+def test_bad_query_parameters_do_not_break_the_page():
+    client = login(build().test_client())
+    client.get("/", base_url=BASE)
+    wait_until_done(client)
+    response = client.get("/?f=evil&page=abc&q=%22%3E%3Cscript%3E", base_url=BASE)
+    assert response.status_code == 200
+    assert "<script>alert" not in response.get_data(as_text=True)
+
+
+def test_uptime_text():
+    assert uptime_text(93600) == "1 d 2 h"
+    assert uptime_text(3900) == "1 h 5 min"
 
 
 def test_text_from_the_feed_is_escaped():
@@ -184,7 +246,7 @@ def test_language_switch_is_remembered():
     assert response.status_code == 302
     client.get("/", base_url=BASE)
     wait_until_done(client)
-    assert "Programas" in client.get("/", base_url=BASE).get_data(as_text=True)
+    assert "Herramientas instaladas" in client.get("/", base_url=BASE).get_data(as_text=True)
     assert client.get("/lang/xx", base_url=BASE).status_code == 404
 
 
@@ -201,13 +263,19 @@ def test_pick_language_prefers_cookie_then_browser_then_default():
 def test_translate_falls_back_to_english_and_to_the_key():
     assert translate("fr", "rescan") == "Scan again"
     assert translate("es", "no-such-key") == "no-such-key"
-    assert translate("en", "more", n=3) == "and 3 more"
+    assert translate("en", "page_of", n=3, total=9) == "Page 3 of 9"
 
 
-@pytest.mark.parametrize("key", ["title", "rescan", "kernel", "programs_fix", "old_kernels"])
+@pytest.mark.parametrize("key", ["title", "rescan", "kernel", "tools", "reclaim", "downloads"])
 def test_every_key_exists_in_both_languages(key):
     assert translate("es", key) != key
     assert translate("en", key) != key
+
+
+def test_both_languages_have_the_same_keys():
+    from ganki.web.i18n import TEXTS
+
+    assert set(TEXTS["es"]) == set(TEXTS["en"])
 
 
 # ---------- start-up: the secret key is never printed ----------
@@ -254,49 +322,3 @@ def test_when_the_browser_does_not_open_only_the_file_path_is_shown(tmp_path, mo
     output = capsys.readouterr().out
     assert str(tmp_path / server.ACCESS_FILE) in output
     assert saved.split("access=")[1] not in output
-
-
-# ---------- inventory page ----------
-
-
-def inventory_client(packages=None):
-    from ganki.collectors.apt import Package
-
-    sample = packages or [
-        Package("vim", "9.1", "amd64", 4000, "text editor", manual=True),
-        Package("zlib", "1.3", "amd64", 50, "compression"),
-    ]
-    app = create_app(make_result, SECRET, PORT, packages=lambda: sample)
-    app.testing = True
-    return login(app.test_client())
-
-
-def test_inventory_requires_the_secret():
-    app = create_app(make_result, SECRET, PORT, packages=lambda: [])
-    assert app.test_client().get("/inventory", base_url=BASE).status_code == 403
-
-
-def test_inventory_lists_packages_and_filters():
-    client = inventory_client()
-    html = client.get("/inventory", base_url=BASE).get_data(as_text=True)
-    assert "vim" in html and "zlib" in html
-    only = client.get("/inventory?manual=1", base_url=BASE).get_data(as_text=True)
-    assert "vim" in only and "zlib" not in only
-    found = client.get("/inventory?q=compress", base_url=BASE).get_data(as_text=True)
-    assert "zlib" in found and "<td>vim</td>" not in found
-
-
-def test_inventory_escapes_the_search_text_and_survives_bad_parameters():
-    client = inventory_client()
-    response = client.get(
-        "/inventory?q=%22%3E%3Cscript%3Ealert(1)%3C/script%3E&page=abc&sort=evil",
-        base_url=BASE,
-    )
-    assert response.status_code == 200
-    assert "<script>alert(1)" not in response.get_data(as_text=True)
-
-
-def test_inventory_is_translated():
-    client = inventory_client()
-    client.get("/lang/es", base_url=BASE)
-    assert "Programas instalados" in client.get("/inventory", base_url=BASE).get_data(as_text=True)

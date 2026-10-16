@@ -17,36 +17,38 @@ from collections.abc import Callable
 from flask import Flask, abort, jsonify, make_response, redirect, render_template, request
 from werkzeug.wrappers import Response
 
-from ganki import inventory
-from ganki.collectors.apt import Package, collect
+from ganki import paging
 from ganki.service import ScanResult
-from ganki.summary import OLD_KERNEL, PROGRAM, RUNNING_KERNEL
+from ganki.summary import RUNNING_KERNEL
+from ganki.tools import OK, OUTDATED, VULNERABLE
 from ganki.web import i18n
 from ganki.web.jobs import DONE, IDLE, RUNNING, ScanJob
 
 SESSION_COOKIE = "ganki_session"
 LANG_COOKIE = "ganki_lang"
-ROW_LIMIT = 60  # rows shown per table; the rest is summarised as "and N more"
+FILTERS = ("all", "outdated", "vulnerable")
+MAX_QUERY_CHARS = 100
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; "
     "img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 )
 
 
-def create_app(
-    scan: Callable[[], ScanResult],
-    secret: str,
-    port: int,
-    packages: Callable[[], list[Package]] = collect,
-) -> Flask:
-    """Build the app.
+def uptime_text(seconds: int) -> str:
+    """``273600`` -> ``3 d 4 h``."""
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    return f"{days} d {hours} h" if days else f"{hours} h {rest // 60} min"
 
-    ``scan`` produces a ``ScanResult``; ``packages`` lists installed packages;
-    ``secret`` is the access token.
-    """
+
+def create_app(scan: Callable[[], ScanResult], secret: str, port: int) -> Flask:
+    """Build the app. ``scan`` produces a ``ScanResult``; ``secret`` is the access token."""
     app = Flask(__name__)
     job = ScanJob(scan)
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    app.jinja_env.filters["size"] = paging.human_size
+    app.jinja_env.filters["bytes"] = lambda n: paging.human_size(int(n) // 1024)
+    app.jinja_env.filters["uptime"] = uptime_text
 
     def authorized() -> bool:
         cookie = request.cookies.get(SESSION_COOKIE, "")
@@ -97,6 +99,37 @@ def create_app(
         )
         return response
 
+    def tool_view(result: ScanResult) -> dict[str, object]:
+        """Everything the tools table needs, taken from the query string."""
+        show_all = request.args.get("show") == "all"
+        chosen = request.args.get("f", "all")
+        chosen = chosen if chosen in FILTERS else "all"
+        query = request.args.get("q", "")[:MAX_QUERY_CHARS]
+        universe = [t for t in result.tools if t.manual or show_all]
+        wanted = {"outdated": OUTDATED, "vulnerable": VULNERABLE}.get(chosen)
+        text = query.strip().lower()
+        shown = [
+            t
+            for t in universe
+            if (wanted is None or t.state == wanted)
+            and (not text or text in t.name.lower() or text in t.description.lower())
+        ]
+        kernel = [r for r in result.risks if r.kind == RUNNING_KERNEL]
+        return {
+            "page": paging.paginate(shown, request.args.get("page", 1, type=int)),
+            "counts": {
+                "all": len(universe),
+                "outdated": sum(1 for t in universe if t.state == OUTDATED),
+                "vulnerable": sum(1 for t in universe if t.state == VULNERABLE),
+                "ok": sum(1 for t in universe if t.state == OK),
+            },
+            "filter": chosen,
+            "filters": FILTERS,
+            "q": query,
+            "show_all": show_all,
+            "kernel": kernel[0] if kernel else None,
+        }
+
     @app.route("/")
     def index() -> str:
         if job.state == IDLE:
@@ -108,43 +141,10 @@ def create_app(
             "t": lambda key, **values: i18n.translate(lang, key, **values),
             "state": job.state,
             "result": result,
-            "limit": ROW_LIMIT,
         }
         if result is not None and job.state in (DONE, RUNNING):
-            risks = result.risks
-            context.update(
-                fixable=[r for r in risks if r.kind == PROGRAM and r.has_fix],
-                unfixable=[r for r in risks if r.kind == PROGRAM and not r.has_fix],
-                kernel=[r for r in risks if r.kind == RUNNING_KERNEL],
-                old_kernels=[r for r in risks if r.kind == OLD_KERNEL],
-                total_fixable=sum(1 for f in result.findings if f.status == "fix_available"),
-                total_nofix=sum(1 for f in result.findings if f.status == "no_fix"),
-                total_cves=len({f.cve_id for f in result.findings}),
-            )
+            context.update(tool_view(result))
         return render_template("index.html", **context)
-
-    app.jinja_env.filters["size"] = inventory.human_size
-
-    @app.route("/inventory")
-    def inventory_page() -> str:
-        lang = current_language()
-        sort = request.args.get("sort", "size")
-        sort = sort if sort in inventory.SORTS else "size"
-        query = request.args.get("q", "")[: inventory.MAX_QUERY_CHARS]
-        manual_only = request.args.get("manual") == "1"
-        number = request.args.get("page", 1, type=int)
-        selected = inventory.select(packages(), query, manual_only, sort)
-        return render_template(
-            "inventory.html",
-            lang=lang,
-            t=lambda key, **values: i18n.translate(lang, key, **values),
-            state="idle",
-            page=inventory.paginate(selected, number),
-            q=query,
-            sort=sort,
-            manual=manual_only,
-            sorts=inventory.SORTS,
-        )
 
     @app.route("/api/status")
     def status() -> Response:

@@ -17,7 +17,7 @@ body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; }
 .top h1 { margin: 0; font-size: 1.3rem; letter-spacing: .08em; color: var(--blue); }
 .lang a { color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
 .lang a[aria-current] { color: var(--text); background: var(--panel); outline: 1px solid var(--line); }
-main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+main { padding: 24px clamp(16px, 3vw, 56px) 64px; }
 .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 h2 { margin: 0; }
 h3 { margin: 32px 0 4px; }
@@ -45,9 +45,9 @@ th { color: var(--muted); font-weight: 600; }
 .p-medium { color: var(--amber); }
 .p-low { color: var(--blue); }
 .p-negligible, .p-unknown { color: var(--muted); }
-.tabs { display: flex; gap: 4px; margin-left: 24px; flex: 1; }
-.tabs a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 8px; }
-.tabs a[aria-current] { color: var(--text); background: var(--panel); outline: 1px solid var(--line); }
+
+
+
 .filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 16px 0 4px; }
 .filters input[type="search"], .filters select { background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
@@ -56,3 +56,39 @@ th { color: var(--muted); font-weight: 600; }
 .filters input:focus-visible, .filters select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .pager { display: flex; gap: 16px; align-items: center; justify-content: center; margin-top: 20px; }
 .pager a { color: var(--blue); }
+.card meter { width: 100%; height: 10px; display: block; margin: 8px 0 6px; }
+.card .small, .small { color: var(--muted); font-size: .82rem; }
+.notice.warn { border-color: var(--amber); }
+.reclaim ul, .downloads { list-style: none; padding: 0; margin: 8px 0; }
+.reclaim li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+.chips a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); }
+.chips a[aria-current] { color: var(--text); background: var(--panel); border-color: var(--blue); }
+td.wrap { white-space: normal; min-width: 280px; max-width: 520px; }
+details { margin-top: 6px; }
+details summary { cursor: pointer; color: var(--blue); font-size: .85rem; }
+.cves { list-style: none; padding: 0; margin: 8px 0; }
+.cves li { padding: 4px 0; }
+.downloads li { display: grid; grid-template-columns: minmax(180px, 1.2fr) 2fr auto; gap: 12px; align-items: center; padding: 5px 0; }
+.downloads meter { width: 100%; height: 10px; }
+.p-ok { color: var(--green); }
+.card .small { display: block; }
+.card strong { display: block; }
+meter { -webkit-appearance: none; appearance: none; border: 0; background: var(--line); border-radius: 6px; }
+meter::-webkit-meter-bar { background: var(--line); border: 0; border-radius: 6px; height: 10px; }
+meter::-webkit-meter-optimum-value { background: var(--green); border-radius: 6px; }
+meter::-webkit-meter-suboptimum-value { background: var(--amber); border-radius: 6px; }
+meter::-webkit-meter-even-less-good-value { background: var(--red); border-radius: 6px; }
+meter::-moz-meter-bar { background: var(--green); border-radius: 6px; }
+meter:-moz-meter-sub-optimum::-moz-meter-bar { background: var(--amber); }
+meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--red); }
+.downloads meter::-webkit-meter-optimum-value { background: var(--blue); }
+.downloads meter::-moz-meter-bar { background: var(--blue); }
+.reclaim { margin-top: 12px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 32px; }
+@media (min-width: 1200px) {
+  .layout { grid-template-columns: minmax(0, 2.2fr) minmax(340px, 1fr); align-items: start; }
+}
+.main-col > section:first-child h3, .side-col > section:first-child h3 { margin-top: 8px; }
+.downloads li { grid-template-columns: minmax(120px, 1fr) minmax(80px, 1.4fr) auto; }

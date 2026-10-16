@@ -17,10 +17,15 @@ from collections.abc import Sequence
 DPKG_QUERY = "/usr/bin/dpkg-query"
 APT_MARK = "/usr/bin/apt-mark"
 APT = "/usr/bin/apt"
+APT_GET = "/usr/bin/apt-get"
 
 # Read-only commands only. Anything that changes the system must be added
 # deliberately, in its own reviewed change, never here by accident.
-ALLOWED_COMMANDS = frozenset({DPKG_QUERY, APT_MARK, APT})
+ALLOWED_COMMANDS = frozenset({DPKG_QUERY, APT_MARK, APT, APT_GET})
+
+# Some executables can change the system, so they are allowed with exact arguments
+# only. ``apt-get`` may only simulate (-s) what autoremove would do; never run it.
+RESTRICTED_ARGUMENTS = {APT_GET: frozenset({("-s", "autoremove")})}
 
 _ENV = {"LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin"}
 
@@ -33,6 +38,9 @@ def run(args: Sequence[str], timeout: int = 60) -> str:
     """Run an allowlisted command (no shell) and return its stdout."""
     if not args or args[0] not in ALLOWED_COMMANDS:
         raise CommandNotAllowedError(f"command not allowed: {args[:1]}")
+    exact = RESTRICTED_ARGUMENTS.get(args[0])
+    if exact is not None and tuple(args[1:]) not in exact:
+        raise CommandNotAllowedError(f"arguments not allowed for {args[0]}: {list(args[1:])}")
     result = subprocess.run(  # noqa: S603  (allowlisted absolute path, no shell)
         list(args),
         capture_output=True,

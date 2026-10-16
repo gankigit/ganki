@@ -60,3 +60,35 @@ def test_last_index_refresh_missing_file_returns_none(tmp_path):
 def test_runner_rejects_commands_not_on_the_allowlist(command):
     with pytest.raises(CommandNotAllowedError):
         run(command)
+
+
+def test_apt_get_is_limited_to_the_simulated_autoremove():
+    from ganki import runner
+
+    for args in (
+        ["/usr/bin/apt-get", "remove", "bash"],
+        ["/usr/bin/apt-get", "autoremove"],
+        ["/usr/bin/apt-get", "-s", "remove", "bash"],
+        ["/usr/bin/apt-get", "-s", "autoremove", "--purge"],
+        ["/usr/bin/apt-get"],
+    ):
+        with pytest.raises(runner.CommandNotAllowedError):
+            runner.run(args)
+
+
+def test_apt_get_simulated_autoremove_is_allowed(monkeypatch):
+    from ganki import runner
+
+    seen = []
+
+    def fake(args, **_kwargs):
+        seen.append(args)
+
+        class Done:
+            stdout = "ok"
+
+        return Done()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake)
+    assert runner.run([runner.APT_GET, "-s", "autoremove"]) == "ok"
+    assert seen == [[runner.APT_GET, "-s", "autoremove"]]
